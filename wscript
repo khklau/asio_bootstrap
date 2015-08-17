@@ -10,6 +10,7 @@ from waflib.extras.preparation import PreparationContext
 from waflib.extras.build_status import BuildStatus
 from waflib.extras.filesystem_utils import removeSubdir
 from waflib.extras.mirror import MirroredTarFile, MirroredZipFile
+from waflib.Build import InstallContext
 
 __asioVersion = '1.10.6'
 __downloadUrl = 'http://sourceforge.net/projects/asio/files/asio/%s (Stable)/%s/download'
@@ -20,11 +21,13 @@ __ntSha256Checksum = '\xef\x45\x7d\x6b\xc1\xd5\xbe\x27\xa8\x50\x23\x3d\x6e\xe5\x
 __srcDir = 'src'
 
 def options(optCtx):
-    optCtx.load('dep_resolver')
+    optCtx.recurse('env')
+    optCtx.load('cxx_env dep_resolver')
 
 def prepare(prepCtx):
     prepCtx.options.dep_base_dir = prepCtx.srcnode.find_dir('..').abspath()
-    prepCtx.load('dep_resolver')
+    prepCtx.recurse('env')
+    prepCtx.load('cxx_env dep_resolver')
     status = BuildStatus.init(prepCtx.path.abspath())
     if status.isSuccess():
 	prepCtx.msg('Preparation already complete', 'skipping')
@@ -54,7 +57,9 @@ def prepare(prepCtx):
     prepCtx.end_msg(os.path.join(prepCtx.path.abspath(), __srcDir))
 
 def configure(confCtx):
-    confCtx.load('dep_resolver')
+    confCtx.options.env_conf_dir = confCtx.srcnode.find_dir('env').abspath()
+    confCtx.recurse('env')
+    confCtx.load('cxx_env dep_resolver')
     status = BuildStatus.init(confCtx.path.abspath())
     if status.isSuccess():
 	confCtx.msg('Configuration already complete', 'skipping')
@@ -68,7 +73,7 @@ def configure(confCtx):
 		'--prefix=%s' % confCtx.srcnode.abspath(),
 		'--without-boost'])
 	if returnCode != 0:
-	    confCtx.fatal('Protobuf configure failed: %d' % returnCode)
+	    confCtx.fatal('Asio configure failed: %d' % returnCode)
     elif os.name == 'nt':
 	# Nothing to do, just use the provided Nmake file
 	return
@@ -77,23 +82,42 @@ def configure(confCtx):
 
 def build(buildCtx):
     status = BuildStatus.load(buildCtx.path.abspath())
-    if status.isSuccess():
+    if status.isSuccess() and not(isinstance(buildCtx, InstallContext)):
 	Logs.pprint('NORMAL', 'Build already complete                   :', sep='')
 	Logs.pprint('GREEN', 'skipping')
 	return
     srcPath = os.path.join(buildCtx.path.abspath(), __srcDir)
     os.chdir(srcPath)
-    if os.name == 'posix':
+    returnCode = 0
+    if os.name == 'posix' and not(isinstance(buildCtx, InstallContext)):
 	returnCode = subprocess.call([
 		'make',
 		'install'])
-    elif os.name == 'nt':
+    elif os.name == 'nt' and not(isinstance(buildCtx, InstallContext)):
 	returnCode = subprocess.call([
 		'nmake',
 		'-f',
 		os.path.join(srcPath, 'src', 'Makefile.msc')])
-    else:
+    elif not(isinstance(buildCtx, InstallContext)):
 	confCtx.fatal('Unsupported OS %s' % os.name)
     if returnCode != 0:
-	buildCtx.fatal('Protobuf build failed: %d' % returnCode)
+	buildCtx.fatal('Asio build failed: %d' % returnCode)
+    buildCtx.shlib(
+	    name='shlib_asio',
+	    source=[buildCtx.path.find_node('src.cxx')],
+	    target='asio',
+	    includes=[os.path.join(buildCtx.path.abspath(), 'include')],
+	    defines=['ASIO_STANDALONE', 'ASIO_SEPARATE_COMPILATION', 'ASIO_DYN_LINK'],
+	    cxxflags=buildCtx.env.CXXFLAGS,
+	    linkflags=buildCtx.env.LDFLAGS,
+	    install_path=os.path.join(buildCtx.path.abspath(), 'lib'))
+    buildCtx.stlib(
+	    name='stlib_asio',
+	    source=[buildCtx.path.find_node('src.cxx')],
+	    target='asio',
+	    includes=[os.path.join(buildCtx.path.abspath(), 'include')],
+	    defines=['ASIO_STANDALONE', 'ASIO_SEPARATE_COMPILATION'],
+	    cxxflags=buildCtx.env.CXXFLAGS,
+	    linkflags=buildCtx.env.LDFLAGS,
+	    install_path=os.path.join(buildCtx.path.abspath(), 'lib'))
     status.setSuccess()
